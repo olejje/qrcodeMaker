@@ -40,6 +40,7 @@
 ```bash
 cd ~/projects/qrterm
 
+go run .                 # термінальне меню
 go run . "привіт"
 go run . -color=false "https://github.com/olejje/ascii-raytrace"
 go run . -png out.png -svg out.svg -ec H "текст"
@@ -58,9 +59,27 @@ go run . -view -ec H "https://example.com"
 ### Як передається текст
 
 1. Аргументами — усе після прапорців об'єднується пробілами.
-2. Без аргументів — читається **один рядок зі stdin** (введіть текст, натисніть Enter).
+2. Без аргументів у терміналі — відкривається **меню**.
 3. Якщо stdin перенаправлено (`echo ... |` чи `< file`) — читається весь потік до EOF.
-4. Порожній ввід або `-h` — довідка з прикладами.
+4. Порожній ввід із pipe або `-h` — довідка з прикладами.
+
+### Термінальне меню
+
+```
+qrterm menu
+  M | auto | vauto | terminal | color:on | invert:off
+  1) Generate
+  2) Settings
+  3) Generate + viewer
+  0) Exit
+Choice:
+```
+
+Меню відкривається само для `go run .` у терміналі або примусово через `-menu`.
+Пункт **Settings** дозволяє змінити EC, режим, версію, ECI, кольори, інверсію,
+quiet zone, scale, формат виводу (`terminal`/`png`/`svg`/`both`) та шляхи файлів.
+Усі налаштування зберігаються між генераціями в межах сеансу. Меню працює на
+звичайному вводі (цифра + Enter), без raw mode.
 
 ### Прапорці
 
@@ -78,6 +97,7 @@ go run . -view -ec H "https://example.com"
 | `-logo` | — | PNG/JPEG у центр (примушує `H`) |
 | `-scale` | `8` | пікселів на модуль у PNG |
 | `-view` | `false` | інтерактивний перегляд |
+| `-menu` | `false` | примусово відкрити термінальне меню |
 
 ### Приклад чистого ASCII (`-color=false -border 2 "qrterm"`)
 
@@ -139,6 +159,7 @@ go run . -view -ec H "https://example.com"
 ```
 qrterm/
 ├── main.go              # CLI, stdin
+├── menu.go              # термінальне меню
 ├── render.go            # термінал, PNG, SVG, логотип
 ├── viewer.go            # інтерактивний перегляд
 ├── raw_linux.go         # raw mode + ioctl (Linux)

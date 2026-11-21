@@ -18,6 +18,34 @@ import (
 
 type moduleCell struct{ upper, lower bool }
 
+type outputConfig struct {
+	color, invert, view bool
+	border, scale       int
+	png, svg            string
+	logo                image.Image
+}
+
+func emit(stdout io.Writer, m *qr.Matrix, c outputConfig) error {
+	if c.view {
+		if err := runViewer(m, c.color, c.invert, c.border); err != nil {
+			return err
+		}
+	} else if err := renderTerminal(stdout, m, c.color, c.invert, c.border); err != nil {
+		return err
+	}
+	if c.png != "" {
+		if err := writePNG(c.png, m, c.invert, c.border, c.scale, c.logo); err != nil {
+			return err
+		}
+	}
+	if c.svg != "" {
+		if err := writeSVG(c.svg, m, c.invert, c.border, c.logo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var halfBlockANSI = func() [2][4]string {
 	var table [2][4]string
 	for inv := 0; inv < 2; inv++ {

@@ -34,8 +34,10 @@ Flags:
   -logo FILE           image to place in the center (forces level H)
   -scale N             pixels per module in the PNG (default 8)
   -view                interactive viewer (arrows, +/-, c, i, q)
+  -menu                interactive terminal menu
 
 Examples:
+  go run .              terminal menu
   go run . "привіт"
   go run . -color=false "https://example.com"
   echo "привіт" | go run .
@@ -70,6 +72,7 @@ func run(args []string, stdout io.Writer) error {
 	logoFlag := fs.String("logo", "", "center image for PNG/SVG output (forces level H)")
 	scaleFlag := fs.Int("scale", 8, "pixels per module in the PNG")
 	viewFlag := fs.Bool("view", false, "interactive raw-mode viewer")
+	menuFlag := fs.Bool("menu", false, "interactive terminal menu")
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -111,6 +114,9 @@ func run(args []string, stdout io.Writer) error {
 	if *scaleFlag < 1 {
 		return fmt.Errorf("-scale must be at least 1")
 	}
+	if *menuFlag || (fs.NArg() == 0 && isTerminal(os.Stdin)) {
+		return runMenu(os.Stdin, stdout)
+	}
 
 	text, err := readText(fs, os.Stdin)
 	if err != nil {
@@ -126,24 +132,21 @@ func run(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	if *viewFlag {
-		if err := runViewer(matrix, *colorFlag, *invertFlag, *borderFlag); err != nil {
-			return err
-		}
-	} else if err := renderTerminal(stdout, matrix, *colorFlag, *invertFlag, *borderFlag); err != nil {
-		return err
-	}
-	if *pngFlag != "" {
-		if err := writePNG(*pngFlag, matrix, *invertFlag, *borderFlag, *scaleFlag, logo); err != nil {
-			return err
-		}
-	}
-	if *svgFlag != "" {
-		if err := writeSVG(*svgFlag, matrix, *invertFlag, *borderFlag, logo); err != nil {
-			return err
-		}
-	}
-	return nil
+	return emit(stdout, matrix, outputConfig{
+		color:  *colorFlag,
+		invert: *invertFlag,
+		view:   *viewFlag,
+		border: *borderFlag,
+		scale:  *scaleFlag,
+		png:    *pngFlag,
+		svg:    *svgFlag,
+		logo:   logo,
+	})
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // readText reads arguments, or one terminal line / whole pipe from stdin.
@@ -151,11 +154,7 @@ func readText(fs *flag.FlagSet, stdin *os.File) (string, error) {
 	if text := strings.Join(fs.Args(), " "); text != "" {
 		return text, nil
 	}
-	info, err := stdin.Stat()
-	if err != nil {
-		return "", fmt.Errorf("stat stdin: %w", err)
-	}
-	if info.Mode()&os.ModeCharDevice != 0 {
+	if isTerminal(stdin) {
 		if stdin == os.Stdin {
 			fmt.Fprint(os.Stderr, "Text: ")
 		}

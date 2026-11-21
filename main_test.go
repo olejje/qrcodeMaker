@@ -252,3 +252,48 @@ func TestRunRejectsBadFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestMenuGenerateAndExit(t *testing.T) {
+	var out bytes.Buffer
+	if err := runMenu(strings.NewReader("1\nhello\n0\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "qrterm menu") || !strings.Contains(got, "M | auto | vauto | terminal") {
+		t.Fatalf("menu was not shown: %q", got[:min(len(got), 200)])
+	}
+	if !strings.Contains(got, "▀") {
+		t.Fatal("menu did not render a QR code")
+	}
+}
+
+func TestMenuSettingsPersist(t *testing.T) {
+	var out bytes.Buffer
+	input := strings.NewReader("2\n1\nH\n0\n1\nHELLO\n0\n")
+	if err := runMenu(input, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "H | auto | vauto | terminal") {
+		t.Fatalf("settings were not applied: %q", out.String())
+	}
+}
+
+func TestMenuWritesPNG(t *testing.T) {
+	path := t.TempDir() + "/menu.png"
+	input := strings.NewReader("2\n9\npng\n10\n" + path + "\n0\n1\nhello\n0\n")
+	var out bytes.Buffer
+	if err := runMenu(input, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Saved "+path) {
+		t.Fatalf("PNG was not reported: %q", out.String())
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := png.DecodeConfig(f); err != nil {
+		t.Fatal(err)
+	}
+}
