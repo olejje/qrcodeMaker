@@ -8,18 +8,14 @@ import (
 	"unsafe"
 )
 
-// rawTerminal wraps stdin in raw mode: no echo, no line buffering, no signals.
-// The caller must call restore before exiting.
 type rawTerminal struct {
-	f     *os.File
 	fd    int
 	old   syscall.Termios
 	state syscall.Termios
 }
 
 func enterRaw() (*rawTerminal, error) {
-	f := os.Stdin
-	fd := int(f.Fd())
+	fd := int(os.Stdin.Fd())
 	var old syscall.Termios
 	if err := rawIOCtl(fd, syscall.TCGETS, unsafe.Pointer(&old)); err != nil {
 		return nil, err
@@ -36,7 +32,7 @@ func enterRaw() (*rawTerminal, error) {
 	if err := rawIOCtl(fd, syscall.TCSETS, unsafe.Pointer(&state)); err != nil {
 		return nil, err
 	}
-	return &rawTerminal{f: f, fd: fd, old: old, state: state}, nil
+	return &rawTerminal{fd: fd, old: old, state: state}, nil
 }
 
 func rawIOCtl(fd int, request uint, arg unsafe.Pointer) error {
@@ -71,7 +67,7 @@ func (t *rawTerminal) readKey() viewerKey {
 	switch b {
 	case 'q', 'Q', 3, 13, ' ':
 		return keyQuit
-	case 27: // ESC or an escape sequence
+	case 27:
 		b2, ok := t.readByte(true)
 		if !ok {
 			return keyQuit
@@ -119,13 +115,13 @@ func (t *rawTerminal) readByte(withTimeout bool) (byte, bool) {
 	if withTimeout {
 		current := t.state
 		current.Cc[syscall.VMIN] = 0
-		current.Cc[syscall.VTIME] = 1 // 100 ms
+		current.Cc[syscall.VTIME] = 1
 		if rawIOCtl(t.fd, syscall.TCSETS, unsafe.Pointer(&current)) == nil {
 			defer rawIOCtl(t.fd, syscall.TCSETS, unsafe.Pointer(&t.state))
 		}
 	}
 	var buf [1]byte
-	n, err := t.f.Read(buf[:])
+	n, err := os.Stdin.Read(buf[:])
 	if n == 0 || err != nil {
 		return 0, false
 	}

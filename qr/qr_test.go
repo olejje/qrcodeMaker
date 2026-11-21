@@ -13,7 +13,7 @@ import (
 )
 
 func TestGFMultiply(t *testing.T) {
-	if gfMultiply(0x53, 0xCA) != 0x8F { // QR polynomial x^8+x^4+x^3+x^2+1
+	if gfMultiply(0x53, 0xCA) != 0x8F {
 		t.Fatal("GF(256) multiplication is wrong")
 	}
 }
@@ -25,7 +25,6 @@ func TestReedSolomonCodewordIsValid(t *testing.T) {
 	ecc := reedSolomonRemainder(data, divisor)
 	codeword := append(append([]byte(nil), data...), ecc...)
 
-	// A valid RS codeword evaluates to zero at every root of the generator.
 	for root := 0; root < numECC; root++ {
 		x := byte(1)
 		for i := 0; i < root; i++ {
@@ -196,8 +195,6 @@ func TestMatchesQrencodeReference(t *testing.T) {
 	}
 }
 
-// TestAllVersionsAgainstQrencode checks the version tables, alignment
-// patterns, version information and block interleaving across the full range.
 func TestAllVersionsAgainstQrencode(t *testing.T) {
 	for _, ec := range []ECLevel{ECLevelL, ECLevelM, ECLevelQ, ECLevelH} {
 		for v := 1; v <= 40; v++ {
@@ -312,8 +309,7 @@ func compareWithQrencode(t *testing.T, opts Options, text string, extra ...strin
 	if ref.Size != ours.Size || ref.Version != ours.Version || ref.EC != ours.EC {
 		t.Fatalf("%q: reference is v%d-%s, ours is v%d-%s", text, ref.Version, ref.EC, ours.Version, ours.EC)
 	}
-	// Mask selection is a heuristic and can differ between encoders, so
-	// compare the unmasked data stream: mode, payload, ECC and interleaving.
+	// Mask choice may differ; compare unmasked data only.
 	if !bytes.Equal(unmaskedData(ours), unmaskedData(ref)) {
 		t.Fatalf("%q: data codewords differ from qrencode", text)
 	}

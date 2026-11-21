@@ -1,5 +1,4 @@
-// qrterm prints QR Codes in your terminal (24-bit ANSI half blocks) and can
-// also save them as a PNG. No third-party packages are used.
+// qrterm prints QR codes in the terminal and saves them as PNG or SVG.
 package main
 
 import (
@@ -8,8 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/color"
-	"image/png"
 	"io"
 	"os"
 	"strconv"
@@ -149,9 +146,7 @@ func run(args []string, stdout io.Writer) error {
 	return nil
 }
 
-// readText takes the text from CLI arguments, or from stdin when none are
-// given. In a terminal it reads just one line so Enter is enough; for a pipe
-// or a redirect it reads everything up to EOF.
+// readText reads arguments, or one terminal line / whole pipe from stdin.
 func readText(fs *flag.FlagSet, stdin *os.File) (string, error) {
 	if text := strings.Join(fs.Args(), " "); text != "" {
 		return text, nil
@@ -175,101 +170,4 @@ func readText(fs *flag.FlagSet, stdin *os.File) (string, error) {
 		return "", fmt.Errorf("read stdin: %w", err)
 	}
 	return strings.TrimRight(string(input), "\r\n"), nil
-}
-
-// renderTerminal draws two module rows per text row using the upper half block.
-func renderTerminal(w io.Writer, m *qr.Matrix, useColor, invert bool, border int) error {
-	out := bufio.NewWriter(w)
-	width := m.Size + 2*border
-
-	inkAt := func(x, y int) bool {
-		return m.Get(x-border, y-border) != invert
-	}
-	rgb := func(ink bool) (int, int, int) {
-		if ink != invert {
-			return 0, 0, 0 // ink is black in normal mode, white when inverted
-		}
-		return 255, 255, 255
-	}
-
-	type colors struct{ upper, lower bool }
-	var last colors
-	haveLast := false
-
-	for y := 0; y < width; y += 2 {
-		for x := 0; x < width; x++ {
-			upper, lower := inkAt(x, y), false
-			if y+1 < width {
-				lower = inkAt(x, y+1)
-			}
-			if !useColor {
-				switch {
-				case upper && lower:
-					out.WriteString("█")
-				case upper:
-					out.WriteString("▀")
-				case lower:
-					out.WriteString("▄")
-				default:
-					out.WriteString(" ")
-				}
-				continue
-			}
-			pair := colors{upper, lower}
-			if !haveLast || pair != last {
-				ur, ug, ub := rgb(upper)
-				lr, lg, lb := rgb(lower)
-				fmt.Fprintf(out, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm", ur, ug, ub, lr, lg, lb)
-				last, haveLast = pair, true
-			}
-			out.WriteString("▀")
-		}
-		if useColor {
-			out.WriteString("\x1b[0m\n")
-			haveLast = false
-		} else {
-			out.WriteString("\n")
-		}
-	}
-	return out.Flush()
-}
-
-func writePNG(path string, m *qr.Matrix, invert bool, border, scale int, logo image.Image) error {
-	side := (m.Size + 2*border) * scale
-	img := image.NewRGBA(image.Rect(0, 0, side, side))
-	inkColor, paperColor := color.Black, color.White
-	if invert {
-		inkColor, paperColor = color.White, color.Black
-	}
-	for y := 0; y < side; y++ {
-		for x := 0; x < side; x++ {
-			img.Set(x, y, paperColor)
-		}
-	}
-	for y := 0; y < m.Size; y++ {
-		for x := 0; x < m.Size; x++ {
-			if !m.Get(x, y) {
-				continue
-			}
-			for dy := 0; dy < scale; dy++ {
-				for dx := 0; dx < scale; dx++ {
-					img.Set((x+border)*scale+dx, (y+border)*scale+dy, inkColor)
-				}
-			}
-		}
-	}
-
-	if logo != nil {
-		drawLogoPixels(img, logo, m, border, scale, paperColor)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
-	}
-	return nil
 }

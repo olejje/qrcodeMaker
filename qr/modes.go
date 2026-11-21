@@ -6,51 +6,60 @@ import (
 	"unicode/utf8"
 )
 
-// Mode is a QR data encoding mode. ModeAuto selects the shortest applicable
-// representation automatically.
 type Mode uint8
 
 const (
 	ModeAuto         Mode = 0
-	ModeNumeric      Mode = 1 // mode indicator 0001
-	ModeAlphanumeric Mode = 2 // mode indicator 0010
-	ModeByte         Mode = 4 // mode indicator 0100
-	ModeKanji        Mode = 8 // mode indicator 1000
+	ModeNumeric      Mode = 1
+	ModeAlphanumeric Mode = 2
+	ModeByte         Mode = 4
+	ModeKanji        Mode = 8
 )
 
-func (m Mode) String() string {
-	switch m {
-	case ModeAuto:
-		return "auto"
-	case ModeNumeric:
-		return "numeric"
-	case ModeAlphanumeric:
-		return "alphanumeric"
-	case ModeByte:
-		return "byte"
-	case ModeKanji:
-		return "kanji"
-	default:
-		return fmt.Sprintf("Mode(%d)", uint8(m))
-	}
+var modeNames = [9]string{
+	ModeAuto:         "auto",
+	ModeNumeric:      "numeric",
+	ModeAlphanumeric: "alphanumeric",
+	ModeByte:         "byte",
+	ModeKanji:        "kanji",
 }
 
-// ParseMode converts a mode name into a Mode.
-func ParseMode(s string) (Mode, error) {
-	switch strings.ToLower(s) {
-	case "auto":
-		return ModeAuto, nil
-	case "numeric", "num":
-		return ModeNumeric, nil
-	case "alphanumeric", "alnum":
-		return ModeAlphanumeric, nil
-	case "byte":
-		return ModeByte, nil
-	case "kanji":
-		return ModeKanji, nil
-	default:
-		return ModeAuto, fmt.Errorf("invalid mode %q (want auto, numeric, alnum, byte or kanji)", s)
+var modesByName = map[string]Mode{
+	"auto":         ModeAuto,
+	"numeric":      ModeNumeric,
+	"num":          ModeNumeric,
+	"alphanumeric": ModeAlphanumeric,
+	"alnum":        ModeAlphanumeric,
+	"byte":         ModeByte,
+	"kanji":        ModeKanji,
+}
+
+func (m Mode) String() string {
+	if int(m) < len(modeNames) && modeNames[m] != "" {
+		return modeNames[m]
 	}
+	return fmt.Sprintf("Mode(%d)", uint8(m))
+}
+
+func ParseMode(s string) (Mode, error) {
+	if m, ok := modesByName[strings.ToLower(s)]; ok {
+		return m, nil
+	}
+	return ModeAuto, fmt.Errorf("invalid mode %q (want auto, numeric, alnum, byte or kanji)", s)
+}
+
+func modeIndex(m Mode) int {
+	switch m {
+	case ModeNumeric:
+		return 0
+	case ModeAlphanumeric:
+		return 1
+	case ModeByte:
+		return 2
+	case ModeKanji:
+		return 3
+	}
+	return -1
 }
 
 const alphanumericChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
@@ -66,41 +75,24 @@ var alphanumericValue = func() [256]int {
 	return table
 }()
 
-// characterCountBits returns the width of the mode's character count field.
+var characterCountWidths = [3][4]int{
+	{10, 9, 8, 8},
+	{12, 11, 16, 10},
+	{14, 13, 16, 12},
+}
+
 func characterCountBits(mode Mode, version int) int {
-	if version <= 9 {
-		switch mode {
-		case ModeNumeric:
-			return 10
-		case ModeAlphanumeric:
-			return 9
-		case ModeByte, ModeKanji:
-			return 8
-		}
-	} else if version <= 26 {
-		switch mode {
-		case ModeNumeric:
-			return 12
-		case ModeAlphanumeric:
-			return 11
-		case ModeByte:
-			return 16
-		case ModeKanji:
-			return 10
-		}
-	} else {
-		switch mode {
-		case ModeNumeric:
-			return 14
-		case ModeAlphanumeric:
-			return 13
-		case ModeByte:
-			return 16
-		case ModeKanji:
-			return 12
-		}
+	i := modeIndex(mode)
+	if i < 0 {
+		return 0
 	}
-	return 0
+	group := 0
+	if version >= 27 {
+		group = 2
+	} else if version >= 10 {
+		group = 1
+	}
+	return characterCountWidths[group][i]
 }
 
 func canEncode(text string, mode Mode) bool {
@@ -144,12 +136,10 @@ func needsECI(text string, mode Mode) bool {
 	return false
 }
 
-// payloadBitLen is the exact number of data bits for one segment, including
-// its mode indicator, character count and optional ECI header.
 func payloadBitLen(text string, mode Mode, version int, eci bool) int {
 	bits := 4 + characterCountBits(mode, version)
 	if eci {
-		bits += 4 + 8 // ECI mode indicator + designator 26 (UTF-8)
+		bits += 12
 	}
 	switch mode {
 	case ModeNumeric:
@@ -174,50 +164,44 @@ func payloadBitLen(text string, mode Mode, version int, eci bool) int {
 	return bits
 }
 
-// chooseMode returns the best mode and ECI flag for a given version.
+var autoModes = [4]Mode{ModeNumeric, ModeAlphanumeric, ModeKanji, ModeByte}
+
 func chooseMode(text string, version int, requested Mode, forceECI bool) (Mode, bool) {
 	if requested != ModeAuto {
 		return requested, forceECI || needsECI(text, requested)
 	}
-	candidates := []Mode{ModeNumeric, ModeAlphanumeric, ModeKanji, ModeByte}
 	best, bestBits := ModeByte, int(^uint(0)>>1)
 	bestECI := false
-	for _, mode := range candidates {
+	for _, mode := range autoModes {
 		if !canEncode(text, mode) {
 			continue
 		}
 		eci := forceECI || needsECI(text, mode)
-		length := payloadBitLen(text, mode, version, eci)
-		if length < bestBits {
+		if length := payloadBitLen(text, mode, version, eci); length < bestBits {
 			best, bestBits, bestECI = mode, length, eci
 		}
 	}
 	return best, bestECI
 }
 
-// appendPayload writes the segment(s) to the bit buffer.
 func appendPayload(bits *bitBuffer, text string, mode Mode, version int, eci bool) error {
 	if eci {
-		bits.appendBits(0b0111, 4) // ECI
-		bits.appendBits(26, 8)     // UTF-8
+		bits.appendBits(0b0111, 4)
+		bits.appendBits(26, 8)
 	}
 	bits.appendBits(int(mode), 4)
 
 	switch mode {
 	case ModeNumeric:
-		digits := make([]int, 0, len(text))
-		for i := 0; i < len(text); i++ {
-			digits = append(digits, int(text[i]-'0'))
-		}
-		bits.appendBits(len(digits), characterCountBits(mode, version))
-		for i := 0; i < len(digits); i += 3 {
-			switch len(digits) - i {
+		bits.appendBits(len(text), characterCountBits(mode, version))
+		for i := 0; i < len(text); i += 3 {
+			switch len(text) - i {
 			case 1:
-				bits.appendBits(digits[i], 4)
+				bits.appendBits(int(text[i]-'0'), 4)
 			case 2:
-				bits.appendBits(digits[i]*10+digits[i+1], 7)
+				bits.appendBits(int(text[i]-'0')*10+int(text[i+1]-'0'), 7)
 			default:
-				bits.appendBits(digits[i]*100+digits[i+1]*10+digits[i+2], 10)
+				bits.appendBits(int(text[i]-'0')*100+int(text[i+1]-'0')*10+int(text[i+2]-'0'), 10)
 			}
 		}
 	case ModeAlphanumeric:

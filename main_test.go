@@ -61,6 +61,23 @@ func TestRenderTerminalColor(t *testing.T) {
 	}
 }
 
+func TestRenderTerminalInvertSwapsColors(t *testing.T) {
+	m, err := qr.Encode("invert", qr.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var normal, inverted bytes.Buffer
+	if err := renderTerminal(&normal, m, true, false, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderTerminal(&inverted, m, true, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	if normal.String() == inverted.String() {
+		t.Fatal("-invert did not change the terminal colors")
+	}
+}
+
 func TestRunWritesTerminalAndPNG(t *testing.T) {
 	file := t.TempDir() + "/out.png"
 	var out bytes.Buffer

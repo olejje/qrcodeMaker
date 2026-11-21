@@ -138,20 +138,18 @@ go run . -view -ec H "https://example.com"
 
 ```
 qrterm/
-├── main.go              # CLI, stdin, рендер, PNG
-├── output.go            # логотип, SVG
+├── main.go              # CLI, stdin
+├── render.go            # термінал, PNG, SVG, логотип
 ├── viewer.go            # інтерактивний перегляд
 ├── raw_linux.go         # raw mode + ioctl (Linux)
 ├── raw_other.go         # stub для інших ОС
 ├── qr/
-│   ├── qr.go            # API: Encode(text, opts)
+│   ├── qr.go            # API, вибір версії та маски
 │   ├── modes.go         # numeric/alnum/byte/kanji, ECI, авто-вибір
-│   ├── kanji.go         # таблиця JIS X 0208 (gen. from EUC-JP)
+│   ├── kanji.go         # таблиця JIS X 0208
 │   ├── tables.go        # таблиці версій 1–40, alignment, capacities
-│   ├── bits.go          # бітовий потік, падіння, інтерлівинг
-│   ├── reed_solomon.go  # GF(256), генератор, залишок
-│   ├── matrix.go        # патерни, format/version, data placement
-│   ├── mask.go          # 8 масок і штрафні правила
+│   ├── codewords.go     # біти, GF(256), Reed–Solomon, інтерлівинг
+│   ├── matrix.go        # патерни, дані, маски, штрафи
 │   └── *_test.go
 ├── assets/preview.png
 └── go.mod

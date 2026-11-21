@@ -8,8 +8,6 @@ import (
 	"qrterm/qr"
 )
 
-type cellPair struct{ upper, lower bool }
-
 type viewerKey int
 
 const (
@@ -26,7 +24,6 @@ const (
 	keyUnknown
 )
 
-// runViewer opens an alternate screen and lets the user pan and zoom the code.
 func runViewer(m *qr.Matrix, useColor, invert bool, border int) error {
 	term, err := enterRaw()
 	if err != nil {
@@ -35,7 +32,7 @@ func runViewer(m *qr.Matrix, useColor, invert bool, border int) error {
 	defer term.restore()
 
 	out := bufio.NewWriter(os.Stdout)
-	fmt.Fprint(out, "\x1b[?1049h\x1b[?25l") // alternate screen, hide cursor
+	fmt.Fprint(out, "\x1b[?1049h\x1b[?25l")
 	defer func() {
 		fmt.Fprint(out, "\x1b[0m\x1b[?25h\x1b[?1049l")
 		out.Flush()
@@ -45,9 +42,7 @@ func runViewer(m *qr.Matrix, useColor, invert bool, border int) error {
 	if rows < 3 {
 		rows = 3
 	}
-	zoom := 2
-	offX, offY := -border, -border
-
+	zoom, offX, offY := 2, -border, -border
 	for {
 		drawView(out, m, cols, rows-1, offX, offY, zoom, useColor, invert)
 		status := fmt.Sprintf(" QR v%d-%s | arrows:move +/-:zoom c:%t i:%t r:reset q:quit | z%d",
@@ -86,52 +81,17 @@ func runViewer(m *qr.Matrix, useColor, invert bool, border int) error {
 
 func drawView(w *bufio.Writer, m *qr.Matrix, cols, rows, offX, offY, zoom int, useColor, invert bool) {
 	fmt.Fprint(w, "\x1b[H")
-	var last cellPair
+	var last moduleCell
 	haveLast := false
-
 	for row := 0; row < rows; row++ {
 		my := offY + row*2/zoom
 		for col := 0; col < cols; col++ {
 			mx := offX + col/zoom
-			upper := m.Get(mx, my) != invert
-			lower := m.Get(mx, my+1) != invert
-			viewCell(w, upper, lower, useColor, &last, &haveLast)
+			writeCell(w, m.Get(mx, my), m.Get(mx, my+1), useColor, invert, &last, &haveLast)
 		}
 		fmt.Fprint(w, "\x1b[0m\x1b[K\n")
 		haveLast = false
 	}
-}
-
-func viewCell(w *bufio.Writer, upper, lower, useColor bool, last *cellPair, haveLast *bool) {
-	if !useColor {
-		switch {
-		case upper && lower:
-			w.WriteString("█")
-		case upper:
-			w.WriteString("▀")
-		case lower:
-			w.WriteString("▄")
-		default:
-			w.WriteString(" ")
-		}
-		return
-	}
-	if !*haveLast || last.upper != upper || last.lower != lower {
-		fmt.Fprintf(w, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm",
-			inkRGB(upper), inkRGB(upper), inkRGB(upper),
-			inkRGB(lower), inkRGB(lower), inkRGB(lower))
-		last.upper, last.lower = upper, lower
-		*haveLast = true
-	}
-	w.WriteString("▀")
-}
-
-// inkRGB mirrors the normal viewer palette: ink is black, paper is white.
-func inkRGB(ink bool) int {
-	if ink {
-		return 0
-	}
-	return 255
 }
 
 func truncate(s string, width int) string {
@@ -141,7 +101,7 @@ func truncate(s string, width int) string {
 	if len(s) <= width {
 		return s
 	}
-	if width <= 1 {
+	if width == 1 {
 		return s[:1]
 	}
 	return s[:width-1] + "›"
