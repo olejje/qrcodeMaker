@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"flag"
+	"image"
+	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -133,10 +136,94 @@ func TestRunShowsUsage(t *testing.T) {
 	}
 }
 
+func TestRunModesAndLargeVersion(t *testing.T) {
+	cases := [][]string{
+		{"-mode", "numeric", "1234567890"},
+		{"-mode", "alnum", "HELLO 123"},
+		{"-mode", "byte", "hello world"},
+		{"-mode", "kanji", "漢字テスト"},
+		{"-eci", "-mode", "byte", "привіт"},
+		{"-v", "40", "-ec", "L", "version forty"},
+	}
+	for _, args := range cases {
+		var out bytes.Buffer
+		if err := run(append([]string{"-color=false"}, args...), &out); err != nil {
+			t.Fatalf("run(%v): %v", args, err)
+		}
+		if out.Len() == 0 {
+			t.Fatalf("run(%v) produced no output", args)
+		}
+	}
+	var out bytes.Buffer
+	if err := run([]string{"-mode", "numeric", "abc"}, &out); err == nil {
+		t.Fatal("non-numeric text must be rejected in numeric mode")
+	}
+}
+
+func TestRunWritesSVG(t *testing.T) {
+	file := t.TempDir() + "/out.svg"
+	var out bytes.Buffer
+	if err := run([]string{"-svg", file, "hello"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svg := string(data)
+	if !strings.HasPrefix(svg, `<svg`) || !strings.Contains(svg, `<rect`) || !strings.HasSuffix(strings.TrimSpace(svg), "</svg>") {
+		t.Fatalf("unexpected SVG: %q", svg[:min(len(svg), 120)])
+	}
+}
+
+func TestRunLogoForcesHighCorrection(t *testing.T) {
+	logoPath := t.TempDir() + "/logo.png"
+	logo := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			logo.Set(x, y, color.RGBA{231, 76, 60, 255})
+		}
+	}
+	lf, err := os.Create(logoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(lf, logo); err != nil {
+		t.Fatal(err)
+	}
+	lf.Close()
+
+	pngPath := t.TempDir() + "/logo-qr.png"
+	var out bytes.Buffer
+	if err := run([]string{"-color=false", "-ec", "L", "-logo", logoPath, "-png", pngPath, "https://example.com/logo"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile, err := os.Open(pngPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := png.DecodeConfig(cfgFile); err != nil {
+		t.Fatal(err)
+	}
+	cfgFile.Close()
+
+	zbar, err := exec.LookPath("zbarimg")
+	if err != nil {
+		t.Skip("zbarimg is not installed")
+	}
+	decoded, err := exec.Command(zbar, "-q", "--raw", pngPath).Output()
+	if err != nil {
+		t.Fatalf("logo QR did not scan: %v (%s)", err, decoded)
+	}
+	if !strings.Contains(string(decoded), "https://example.com/logo") {
+		t.Fatalf("decoded %q", decoded)
+	}
+}
+
 func TestRunRejectsBadFlags(t *testing.T) {
 	cases := [][]string{
 		{"-ec", "X", "text"},
-		{"-v", "11", "text"},
+		{"-v", "41", "text"},
 		{"-v", "abc", "text"},
 		{"-border", "-1", "text"},
 		{"-scale", "0", "text"},

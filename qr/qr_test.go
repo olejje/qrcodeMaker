@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,7 @@ func TestKnownCapacities(t *testing.T) {
 	}{
 		{1, ECLevelL, 17}, {1, ECLevelM, 14}, {1, ECLevelQ, 11}, {1, ECLevelH, 7},
 		{10, ECLevelL, 271}, {10, ECLevelM, 213}, {10, ECLevelQ, 151}, {10, ECLevelH, 119},
+		{40, ECLevelL, 2953}, {40, ECLevelM, 2331}, {40, ECLevelQ, 1663}, {40, ECLevelH, 1273},
 	}
 	for _, c := range cases {
 		if got := byteCapacity(c.version, c.ec); got != c.want {
@@ -117,10 +119,10 @@ func TestAutoVersion(t *testing.T) {
 }
 
 func TestEncodeErrors(t *testing.T) {
-	if _, err := Encode("x", Options{Version: 11}); err == nil {
-		t.Error("version 11 must be rejected")
+	if _, err := Encode("x", Options{Version: 41}); err == nil {
+		t.Error("version 41 must be rejected")
 	}
-	if _, err := Encode(strings.Repeat("x", 300), Options{EC: ECLevelH}); err == nil {
+	if _, err := Encode(strings.Repeat("x", 3000), Options{EC: ECLevelH}); err == nil {
 		t.Error("oversized payload must be rejected")
 	}
 	if _, err := Encode("x", Options{EC: ECLevel(99)}); err == nil {
@@ -180,10 +182,6 @@ func TestDecodeWithZBar(t *testing.T) {
 }
 
 func TestMatchesQrencodeReference(t *testing.T) {
-	path, err := exec.LookPath("qrencode")
-	if err != nil {
-		t.Skip("qrencode is not installed")
-	}
 	cases := []struct {
 		text string
 		ec   ECLevel
@@ -194,24 +192,130 @@ func TestMatchesQrencodeReference(t *testing.T) {
 		{"a somewhat longer byte-mode message for version four", ECLevelQ, "Q"},
 	}
 	for _, c := range cases {
-		ours, err := Encode(c.text, Options{EC: c.ec})
-		if err != nil {
-			t.Fatal(err)
-		}
-		out, err := exec.Command(path, "-t", "ASCII", "-m", "0", "-l", c.flag, "-o", "-", c.text).Output()
-		if err != nil {
-			t.Fatal(err)
-		}
-		ref := parseASCIIMatrix(t, string(out))
-		if ref.Size != ours.Size || ref.Version != ours.Version || ref.EC != ours.EC {
-			t.Fatalf("%q: reference is v%d-%s, ours is v%d-%s", c.text, ref.Version, ref.EC, ours.Version, ours.EC)
-		}
+		compareWithQrencode(t, Options{EC: c.ec}, c.text, "-l", c.flag)
+	}
+}
 
-		// Mask selection is a heuristic and can differ between encoders, so
-		// compare the unmasked data stream: mode, payload, ECC and interleaving.
-		if !bytes.Equal(unmaskedData(ours), unmaskedData(ref)) {
-			t.Fatalf("%q: data codewords differ from qrencode", c.text)
+// TestAllVersionsAgainstQrencode checks the version tables, alignment
+// patterns, version information and block interleaving across the full range.
+func TestAllVersionsAgainstQrencode(t *testing.T) {
+	for _, ec := range []ECLevel{ECLevelL, ECLevelM, ECLevelQ, ECLevelH} {
+		for v := 1; v <= 40; v++ {
+			compareWithQrencode(t, Options{EC: ec, Mode: ModeByte, Version: v}, "abcde", "-8", "-l", ec.String(), "-v", strconv.Itoa(v))
 		}
+	}
+}
+
+func TestModesAgainstQrencode(t *testing.T) {
+	cases := []struct {
+		text string
+		mode Mode
+		args []string
+	}{
+		{"12345678901234567890", ModeNumeric, nil},
+		{"HELLO WORLD 123", ModeAlphanumeric, nil},
+		{"hello world", ModeByte, []string{"-8"}},
+	}
+	for _, c := range cases {
+		compareWithQrencode(t, Options{Mode: c.mode}, c.text, c.args...)
+	}
+}
+
+func TestKanjiAgainstQrencode(t *testing.T) {
+	path, err := exec.LookPath("qrencode")
+	if err != nil {
+		t.Skip("qrencode is not installed")
+	}
+	iconvPath, err := exec.LookPath("iconv")
+	if err != nil {
+		t.Skip("iconv is not installed")
+	}
+	text := "漢字テスト"
+	conv := exec.Command(iconvPath, "-f", "UTF-8", "-t", "SHIFT_JIS")
+	conv.Stdin = strings.NewReader(text)
+	shiftJIS, err := conv.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ours, err := Encode(text, Options{Mode: ModeKanji, EC: ECLevelM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ours.Mode != ModeKanji {
+		t.Fatalf("expected Kanji mode, got %s", ours.Mode)
+	}
+	refCmd := exec.Command(path, "-t", "ASCII", "-m", "0", "-l", "M", "-k", "-o", "-")
+	refCmd.Stdin = bytes.NewReader(shiftJIS)
+	out, err := refCmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := parseASCIIMatrix(t, string(out))
+	if ref.Size != ours.Size || !bytes.Equal(unmaskedData(ours), unmaskedData(ref)) {
+		t.Fatal("kanji data codewords differ from qrencode")
+	}
+}
+
+func TestECIRoundTrip(t *testing.T) {
+	path, err := exec.LookPath("zbarimg")
+	if err != nil {
+		t.Skip("zbarimg is not installed")
+	}
+	cases := []struct {
+		text string
+		opts Options
+		mode Mode
+		eci  bool
+	}{
+		{"привіт", Options{}, ModeByte, true},
+		{"こんにちは", Options{}, ModeKanji, false},
+		{"こんにちは", Options{Mode: ModeByte}, ModeByte, true},
+		{"HELLO", Options{}, ModeAlphanumeric, false},
+	}
+	for _, c := range cases {
+		m, err := Encode(c.text, c.opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Mode != c.mode || m.ECI != c.eci {
+			t.Fatalf("%q: got mode %s ECI=%v, want %s ECI=%v", c.text, m.Mode, m.ECI, c.mode, c.eci)
+		}
+		file := t.TempDir() + "/eci.png"
+		writeTestPNG(t, file, m, false)
+		out, err := exec.Command(path, "-q", "--raw", file).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%q: zbarimg failed: %v (%s)", c.text, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != c.text {
+			t.Errorf("decoded %q, want %q", got, c.text)
+		}
+	}
+}
+
+func compareWithQrencode(t *testing.T, opts Options, text string, extra ...string) {
+	t.Helper()
+	path, err := exec.LookPath("qrencode")
+	if err != nil {
+		t.Skip("qrencode is not installed")
+	}
+	ours, err := Encode(text, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{"-t", "ASCII", "-m", "0", "-l", opts.EC.String(), "-o", "-"}, extra...)
+	args = append(args, text)
+	out, err := exec.Command(path, args...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := parseASCIIMatrix(t, string(out))
+	if ref.Size != ours.Size || ref.Version != ours.Version || ref.EC != ours.EC {
+		t.Fatalf("%q: reference is v%d-%s, ours is v%d-%s", text, ref.Version, ref.EC, ours.Version, ours.EC)
+	}
+	// Mask selection is a heuristic and can differ between encoders, so
+	// compare the unmasked data stream: mode, payload, ECC and interleaving.
+	if !bytes.Equal(unmaskedData(ours), unmaskedData(ref)) {
+		t.Fatalf("%q: data codewords differ from qrencode", text)
 	}
 }
 

@@ -1,9 +1,10 @@
 // Package qr implements a small, dependency-free QR Code encoder.
 //
-// Supported modes: byte mode, versions 1-10, all four error correction levels.
-// The encoder follows ISO/IEC 18004: data encoding, Reed-Solomon error
-// correction, block interleaving, function patterns, mask selection and
-// format/version information.
+// Supported modes: numeric, alphanumeric, byte (with optional ECI 26 for
+// UTF-8) and Kanji (JIS X 0208), versions 1-40, all four error correction
+// levels. The implementation follows ISO/IEC 18004: data encoding,
+// Reed-Solomon error correction, block interleaving, function patterns, mask
+// selection and format/version information.
 package qr
 
 import "fmt"
@@ -52,7 +53,9 @@ func ParseECLevel(s string) (ECLevel, error) {
 // Options controls the QR Code encoding.
 type Options struct {
 	EC      ECLevel // error correction level; zero means ECLevelM
-	Version int     // 1-10; zero means "pick the smallest version that fits"
+	Version int     // 1-40; zero means "pick the smallest version that fits"
+	Mode    Mode    // ModeAuto by default
+	ECI     bool    // force ECI 26 (UTF-8) in byte mode; auto for non-ASCII
 }
 
 // Matrix is the finished QR symbol. Modules[y][x] is true for a dark module.
@@ -60,6 +63,8 @@ type Options struct {
 type Matrix struct {
 	Version int
 	EC      ECLevel
+	Mode    Mode
+	ECI     bool
 	Mask    int
 	Size    int
 	Modules [][]bool
@@ -74,7 +79,7 @@ func (m *Matrix) Get(x, y int) bool {
 	return m.Modules[y][x]
 }
 
-// Encode encodes text as a QR Code using byte mode.
+// Encode encodes text as a QR Code.
 func Encode(text string, opts Options) (*Matrix, error) {
 	ec := opts.EC
 	if ec == 0 {
@@ -83,43 +88,49 @@ func Encode(text string, opts Options) (*Matrix, error) {
 	if !validEC(ec) {
 		return nil, fmt.Errorf("invalid error correction level %d", uint8(ec))
 	}
+	mode := opts.Mode
+	if mode == ModeAuto {
+		mode = ModeByte
+	}
+	if mode != ModeAuto && mode != ModeNumeric && mode != ModeAlphanumeric && mode != ModeByte && mode != ModeKanji {
+		return nil, fmt.Errorf("invalid mode %d", uint8(mode))
+	}
+	if opts.Mode != ModeAuto && !canEncode(text, opts.Mode) {
+		return nil, fmt.Errorf("text cannot be encoded in %s mode", opts.Mode)
+	}
 
-	data := []byte(text)
 	version := opts.Version
+	var chosenMode Mode
+	var useECI bool
 	if version == 0 {
 		found := false
 		for v := 1; v <= maxVersion; v++ {
-			if byteCapacity(v, ec) >= len(data) {
-				version = v
-				found = true
+			m, eci := chooseMode(text, v, opts.Mode, opts.ECI)
+			if payloadBitLen(text, m, v, eci) <= blockSpecFor(v, ec).dataCodewords()*8 {
+				version, chosenMode, useECI, found = v, m, eci, true
 				break
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("data too long: %d bytes exceed the capacity of version %d at level %s (%d bytes)",
-				len(data), maxVersion, ec, byteCapacity(maxVersion, ec))
+			return nil, fmt.Errorf("data too long: %d characters do not fit version %d at level %s",
+				len(text), maxVersion, ec)
 		}
-	}
-	if version < 1 || version > maxVersion {
-		return nil, fmt.Errorf("version must be between 1 and %d, got %d", maxVersion, version)
-	}
-	if len(data) > byteCapacity(version, ec) {
-		return nil, fmt.Errorf("data too long: %d bytes do not fit version %d at level %s (%d bytes)",
-			len(data), version, ec, byteCapacity(version, ec))
+	} else {
+		if version < 1 || version > maxVersion {
+			return nil, fmt.Errorf("version must be between 1 and %d, got %d", maxVersion, version)
+		}
+		chosenMode, useECI = chooseMode(text, version, opts.Mode, opts.ECI)
+		if bits := payloadBitLen(text, chosenMode, version, useECI); bits > blockSpecFor(version, ec).dataCodewords()*8 {
+			return nil, fmt.Errorf("data too long: payload needs %d bits, version %d at level %s has %d",
+				bits, version, ec, blockSpecFor(version, ec).dataCodewords()*8)
+		}
 	}
 
 	// 1. Build the data codeword stream.
 	bits := &bitBuffer{}
-	bits.appendBits(0b0100, 4) // byte mode
-	if version <= 9 {
-		bits.appendBits(len(data), 8)
-	} else {
-		bits.appendBits(len(data), 16)
+	if err := appendPayload(bits, text, chosenMode, version, useECI); err != nil {
+		return nil, err
 	}
-	for _, b := range data {
-		bits.appendBits(int(b), 8)
-	}
-
 	spec := blockSpecFor(version, ec)
 	codewords := bits.toCodewords(spec.dataCodewords())
 
@@ -148,6 +159,8 @@ func Encode(text string, opts Options) (*Matrix, error) {
 	return &Matrix{
 		Version: version,
 		EC:      ec,
+		Mode:    chosenMode,
+		ECI:     useECI,
 		Mask:    bestMask,
 		Size:    result.size,
 		Modules: result.modules,
@@ -156,10 +169,9 @@ func Encode(text string, opts Options) (*Matrix, error) {
 
 // byteCapacity is the largest byte-mode payload (in bytes) for a version/level.
 func byteCapacity(version int, ec ECLevel) int {
-	spec := blockSpecFor(version, ec)
 	countBits := 8
 	if version >= 10 {
 		countBits = 16
 	}
-	return (spec.dataCodewords()*8 - 4 - countBits) / 8
+	return (blockSpecFor(version, ec).dataCodewords()*8 - 4 - countBits) / 8
 }
