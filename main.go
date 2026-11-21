@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -16,6 +17,31 @@ import (
 
 	"qrterm/qr"
 )
+
+const usageText = `Usage: qrterm [flags] "text"
+
+With no text argument, input is read from stdin: one line in a terminal,
+or the whole stream when piped.
+
+Flags:
+  -ec L|M|Q|H    error correction level (default M)
+  -v auto|1..10  QR version (default auto)
+  -color        24-bit ANSI colors and half blocks (default true)
+  -invert       swap dark and light modules
+  -border N     quiet zone in modules (default 4)
+  -png FILE     also save the symbol as a PNG
+  -scale N      pixels per module in the PNG (default 8)
+
+Examples:
+  go run . "привіт"
+  go run . -color=false "https://example.com"
+  echo "привіт" | go run .
+  go run . -png out.png -ec H "текст"
+`
+
+func printUsage(w io.Writer) {
+	io.WriteString(w, usageText)
+}
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -33,7 +59,12 @@ func run(args []string, stdout io.Writer) error {
 	borderFlag := fs.Int("border", 4, "quiet zone in modules")
 	pngFlag := fs.String("png", "", "also write the symbol to this PNG file")
 	scaleFlag := fs.Int("scale", 8, "pixels per module in the PNG")
+	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printUsage(stdout)
+			return nil
+		}
 		return err
 	}
 
@@ -55,16 +86,13 @@ func run(args []string, stdout io.Writer) error {
 		return fmt.Errorf("-scale must be at least 1")
 	}
 
-	text := strings.Join(fs.Args(), " ")
-	if text == "" {
-		input, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return fmt.Errorf("read stdin: %w", err)
-		}
-		text = strings.TrimRight(string(input), "\r\n")
+	text, err := readText(fs, os.Stdin)
+	if err != nil {
+		return err
 	}
 	if text == "" {
-		return fmt.Errorf("nothing to encode: pass text as arguments or on stdin")
+		printUsage(stdout)
+		return nil
 	}
 
 	matrix, err := qr.Encode(text, qr.Options{EC: ec, Version: version})
@@ -81,6 +109,32 @@ func run(args []string, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// readText takes the text from CLI arguments, or from stdin when none are
+// given. In a terminal it reads just one line so Enter is enough; for a pipe
+// or a redirect it reads everything up to EOF.
+func readText(fs *flag.FlagSet, stdin *os.File) (string, error) {
+	if text := strings.Join(fs.Args(), " "); text != "" {
+		return text, nil
+	}
+	info, err := stdin.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat stdin: %w", err)
+	}
+	if info.Mode()&os.ModeCharDevice != 0 {
+		fmt.Fprint(os.Stderr, "Text: ")
+		line, err := bufio.NewReader(stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("read stdin: %w", err)
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	input, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", fmt.Errorf("read stdin: %w", err)
+	}
+	return strings.TrimRight(string(input), "\r\n"), nil
 }
 
 // renderTerminal draws two module rows per text row using the upper half block.

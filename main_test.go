@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"image/png"
 	"os"
 	"strings"
@@ -77,6 +78,58 @@ func TestRunWritesTerminalAndPNG(t *testing.T) {
 	}
 	if cfg.Width != (21+4)*3 || cfg.Height != (21+4)*3 {
 		t.Fatalf("PNG size %dx%d, want %dx%d", cfg.Width, cfg.Height, (21+4)*3, (21+4)*3)
+	}
+}
+
+func TestReadText(t *testing.T) {
+	withArgs := flag.NewFlagSet("test", flag.ContinueOnError)
+	if err := withArgs.Parse([]string{"hello", "world"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readText(withArgs, nil); err != nil || got != "hello world" {
+		t.Fatalf("args: got %q, err %v", got, err)
+	}
+
+	file, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("piped text\nsecond line\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	empty := flag.NewFlagSet("test", flag.ContinueOnError)
+	if err := empty.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readText(empty, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "piped text\nsecond line" {
+		t.Fatalf("pipe: got %q", got)
+	}
+
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	if got, err := readText(empty, devNull); err != nil || got != "" {
+		t.Fatalf("terminal EOF: got %q, err %v", got, err)
+	}
+}
+
+func TestRunShowsUsage(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"-h"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Usage: qrterm") || !strings.Contains(out.String(), "go run . \"привіт\"") {
+		t.Fatalf("unexpected help output: %q", out.String())
 	}
 }
 
